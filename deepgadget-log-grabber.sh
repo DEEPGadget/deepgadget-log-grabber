@@ -6,8 +6,7 @@
 # Note: This script consolidates system information, which may include sensitive data. User discretion advised.
 
 # Copyright 2024 Manycore, Inc.
-# Website:		https://Manycorelabs.com
-# Author(s):		Bryan Gwin, Ryan England
+# Author(s):		Jiseo Choi
 # Script License:	BSD 3-clause
 
 # Script info and disclaimer
