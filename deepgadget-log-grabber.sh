@@ -11,6 +11,10 @@
 
 # Script info and disclaimer
 script_info_and_disclaimer() {
+    echo "Usage: $0 [--short] [output-name]"
+    echo "  --short:     Collect only /etc config and /var/log entries (faster)."
+    echo "  output-name: Optional. Archive will be saved as <output-name>.tar.gz (default: Manycore-bug-report.tar.gz)"
+    echo
     echo "This script is intended to run on a Manycore machine and collects various system logs and information for diagnostic purposes."
     echo "It includes the use of NVIDIA's bug report script to gather detailed information about NVIDIA GPUs and other system info."
     echo "Credit to NVIDIA Corporation for the nvidia-bug-report.sh script."
@@ -25,7 +29,7 @@ script_info_and_disclaimer() {
     done | sort
     confirm_tools
     echo
-    echo "By delivering 'Manycore-bug-report.log.gz' to Manycore, you acknowledge"
+    echo "By delivering '${OUTPUT_NAME}.tar.gz' to Manycore, you acknowledge"
     echo "and agree that sensitive information may inadvertently be included in"
     echo "the output. Notwithstanding the foregoing, Manycore will use the"
     echo "output only for the purpose of investigating your reported issue."
@@ -57,6 +61,21 @@ integer_check() {
     echo 1
     return
 }
+
+# Parse arguments: [--short] [output-name]
+# --short: collect only /etc config and /var/log entries (faster)
+SHORT_MODE=0
+OUTPUT_NAME="Manycore-bug-report"
+for _arg in "$@"; do
+    case "$_arg" in
+        --short) SHORT_MODE=1 ;;
+        --*) ;;
+        *) OUTPUT_NAME="$_arg" ;;
+    esac
+done
+unset _arg
+# In short mode no external tools are needed; suppress the install prompt
+[ $SHORT_MODE -eq 1 ] && SKIP_TOOLS=1
 
 # We will later check whether this machine will benefit from certain tools, rather than just installing them.
 # Proactively assume the machine is not a VM
@@ -194,6 +213,12 @@ BMC_INFO_DIR="$FINAL_DIR/bmc-info"
 mkdir -p "$BMC_INFO_DIR"
 GRUB_DIR="$FINAL_DIR/grub"
 mkdir -p "$GRUB_DIR"
+ETC_CONFIG_DIR="$FINAL_DIR/etc-config"
+mkdir -p "$ETC_CONFIG_DIR"
+ETC_SERVICES_DIR="$ETC_CONFIG_DIR/services"
+mkdir -p "$ETC_SERVICES_DIR"
+ETC_MODULES_DIR="$ETC_CONFIG_DIR/modules"
+mkdir -p "$ETC_MODULES_DIR"
 
 # Collect SMART data for all drives
 collect_drive_checks() {
@@ -206,14 +231,103 @@ collect_drive_checks() {
     done
 }
 
-# Generate NVIDIA bug report
-echo "Running nvidia-bug-report.sh..."
-sudo nvidia-bug-report.sh >/dev/null 2>&1
+# Collect /etc networking, services, and modules configuration
+collect_etc_config() {
+    # --- Networking ---
+    for f in /etc/hosts /etc/hostname /etc/resolv.conf /etc/nsswitch.conf \
+              /etc/hosts.allow /etc/hosts.deny; do
+        [ -f "$f" ] && cp "$f" "${NETWORKING_DIR}/etc-$(basename "$f" | tr '.' '-').txt" 2>/dev/null
+    done
 
-# If nvidia-bug-report.log.gz exists, decompress it
-if [ -f "nvidia-bug-report.log.gz" ]; then
-    gunzip -c nvidia-bug-report.log.gz >"${FINAL_DIR}/nvidia-bug-report.log"
-    sudo rm nvidia-bug-report.log.gz
+    if [ -f /etc/nftables.conf ]; then
+        cp /etc/nftables.conf "${NETWORKING_DIR}/etc-nftables-conf.txt"
+    fi
+
+    if [ -d /etc/network ]; then
+        find /etc/network -maxdepth 2 -type f | sort | while read -r f; do
+            rel="${f#/etc/network/}"
+            mkdir -p "${NETWORKING_DIR}/etc-network/$(dirname "$rel")"
+            cp "$f" "${NETWORKING_DIR}/etc-network/$rel" 2>/dev/null
+        done
+    fi
+
+    # NM main config only (system-connections excluded to avoid stored credentials)
+    if [ -f /etc/NetworkManager/NetworkManager.conf ]; then
+        cp /etc/NetworkManager/NetworkManager.conf "${NETWORKING_DIR}/etc-NetworkManager.conf.txt"
+    fi
+
+    if [ -d /etc/systemd/network ]; then
+        find /etc/systemd/network -maxdepth 1 \
+            \( -name "*.network" -o -name "*.netdev" -o -name "*.link" \) -type f | \
+            sort | while read -r f; do
+            cp "$f" "${NETWORKING_DIR}/" 2>/dev/null
+        done
+    fi
+
+    # --- Services ---
+    for conf in system.conf journald.conf logind.conf timesyncd.conf resolved.conf; do
+        [ -f "/etc/systemd/$conf" ] && cp "/etc/systemd/$conf" "${ETC_SERVICES_DIR}/"
+    done
+
+    if [ -d /etc/systemd/system ]; then
+        find /etc/systemd/system -maxdepth 1 \
+            \( -name "*.service" -o -name "*.target" -o -name "*.timer" \
+               -o -name "*.socket" -o -name "*.mount" \) 2>/dev/null | \
+            sort >"${ETC_SERVICES_DIR}/systemd-system-units-list.txt"
+        while IFS= read -r f; do
+            [ -f "$f" ] && cp "$f" "${ETC_SERVICES_DIR}/" 2>/dev/null
+        done <"${ETC_SERVICES_DIR}/systemd-system-units-list.txt"
+    fi
+
+    ls -la /etc/init.d/ >"${ETC_SERVICES_DIR}/init-d-list.txt" 2>/dev/null
+
+    [ -f /etc/crontab ] && cp /etc/crontab "${ETC_SERVICES_DIR}/crontab.txt"
+    for crondir in /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.weekly /etc/cron.monthly; do
+        if [ -d "$crondir" ]; then
+            tag="$(basename "$crondir")"
+            ls -la "$crondir" >"${ETC_SERVICES_DIR}/${tag}-list.txt" 2>/dev/null
+            for f in "$crondir"/*; do
+                [ -f "$f" ] && cat "$f" >>"${ETC_SERVICES_DIR}/${tag}-contents.txt" 2>/dev/null
+            done
+        fi
+    done
+
+    # --- Modules ---
+    [ -f /etc/modules ] && cp /etc/modules "${ETC_MODULES_DIR}/etc-modules.txt"
+
+    if [ -d /etc/modules-load.d ]; then
+        find /etc/modules-load.d -maxdepth 1 -type f | sort | while read -r f; do
+            cp "$f" "${ETC_MODULES_DIR}/" 2>/dev/null
+        done
+    fi
+
+    if [ -d /etc/modprobe.d ]; then
+        find /etc/modprobe.d -maxdepth 1 -type f | sort | while read -r f; do
+            cp "$f" "${ETC_MODULES_DIR}/" 2>/dev/null
+        done
+    fi
+
+    # --- Slurm ---
+    if [ -d /etc/slurm ]; then
+        cp -r /etc/slurm "${ETC_CONFIG_DIR}/slurm" 2>/dev/null
+    fi
+
+    # --- Lustre ---
+    if [ -d /etc/lustre ]; then
+        cp -r /etc/lustre "${ETC_CONFIG_DIR}/lustre" 2>/dev/null
+    fi
+}
+
+if [ $SHORT_MODE -eq 0 ]; then
+    # Generate NVIDIA bug report
+    echo "Running nvidia-bug-report.sh..."
+    sudo nvidia-bug-report.sh >/dev/null 2>&1
+
+    # If nvidia-bug-report.log.gz exists, decompress it
+    if [ -f "nvidia-bug-report.log.gz" ]; then
+        gunzip -c nvidia-bug-report.log.gz >"${FINAL_DIR}/nvidia-bug-report.log"
+        sudo rm nvidia-bug-report.log.gz
+    fi
 fi
 
 echo "Collecting system logs and information..."
@@ -234,8 +348,20 @@ find /var/log/apt -type f -name "history.log*" | sort -Vr | while read log; do
     fi
 done
 
+# Collect Slurm and Lustre logs from /var/log if present
+for _logdir in /var/log/slurm /var/log/lustre; do
+    [ -d "$_logdir" ] && sudo cp -r "$_logdir" "${SYSTEM_LOGS_DIR}/" 2>/dev/null
+done
+unset _logdir
+
 sudo dmesg -Tl err >"${SYSTEM_LOGS_DIR}/dmesg-errors.txt"
-sudo journalctl >"${SYSTEM_LOGS_DIR}/journalctl.txt"
+
+if [ $SHORT_MODE -eq 0 ]; then
+    # Limit to last 30 days to avoid excessively large output; remove --since for full journal
+    sudo journalctl --since "30 days ago" >"${SYSTEM_LOGS_DIR}/journalctl.txt"
+fi
+
+if [ $SHORT_MODE -eq 0 ]; then
 
 ibstat >"${FINAL_DIR}/ibstat.txt" 2>/dev/null
 if [ ! -s "${FINAL_DIR}/ibstat.txt" ]; then
@@ -347,12 +473,17 @@ echo "$(uptime -p)" since "$(uptime -s)" >"${FINAL_DIR}/uptime.txt"
 
 collect_drive_checks
 
+fi # SHORT_MODE -eq 0
+
+echo "Collecting /etc networking, services, and modules configuration..."
+collect_etc_config
+
 # Compress all collected logs into a single file
-sudo tar -zcf Manycore-bug-report.tar.gz -C "$TMP_DIR" Manycore-bug-report
+sudo tar -zcf "${OUTPUT_NAME}.tar.gz" -C "$TMP_DIR" Manycore-bug-report
 
 # Cleanup
 rm -rf "$TMP_DIR"
 
 echo
-echo "All logs have been collected and compressed into Manycore-bug-report.tar.gz."
+echo "All logs have been collected and compressed into ${OUTPUT_NAME}.tar.gz."
 echo
