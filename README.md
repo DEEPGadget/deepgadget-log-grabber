@@ -1,17 +1,24 @@
 # deepgadget-log-grabber
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 deepgadget 서버 장애 진단을 위한 로그 수집 스크립트입니다. 시스템 로그, 하드웨어 정보, GPU 데이터, 네트워크/서비스/모듈 설정 등을 단일 압축 아카이브로 수집해 지원 및 장애 분석에 활용합니다.
 =======
 ManyCoreSoft의 deepgadget™ 서버에서 실행되는 진단용 로그 수집 스크립트입니다. 시스템 로그, GPU 정보, 하드웨어 데이터, 네트워크 설정 등을 수집하여 단일 압축 파일로 묶습니다.
 
 ---
 >>>>>>> 549d65d (/var/log 하위 과거로그 수집, /etc 하위항목 수집)
+=======
+deepgadget 서버 장애 진단을 위한 로그 수집 스크립트입니다. 시스템 로그, 하드웨어 정보, GPU 데이터, 네트워크/서비스/모듈 설정 등을 단일 압축 아카이브로 수집해 지원 및 장애 분석에 활용합니다.
+>>>>>>> faf44f7d47c044a8019bac7d837de08c425e4a51
 
 ## 사용법
 
 ```bash
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> faf44f7d47c044a8019bac7d837de08c425e4a51
 sudo bash deepgadget-log-grabber.sh [--short] [출력파일명]
 ```
 
@@ -113,6 +120,7 @@ SKIP_TOOLS=1 sudo bash deepgadget-log-grabber.sh
 BSD 3-Clause. [LICENSE](LICENSE) 참조.
 
 NVIDIA의 `nvidia-bug-report.sh` 스크립트는 NVIDIA Corporation의 자산으로, 출처를 명시하여 사용합니다.
+<<<<<<< HEAD
 =======
 sudo bash deepgadget-log-grabber.sh [--detail] [output-name]
 ```
@@ -283,3 +291,5 @@ Copyright 2024 Manycore, Inc. — BSD 3-Clause License
 
 NVIDIA 버그 리포트 기능(`nvidia-bug-report.sh`) 크레딧: NVIDIA Corporation.
 >>>>>>> 549d65d (/var/log 하위 과거로그 수집, /etc 하위항목 수집)
+=======
+>>>>>>> faf44f7d47c044a8019bac7d837de08c425e4a51

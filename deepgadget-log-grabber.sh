@@ -19,12 +19,15 @@ script_info_and_disclaimer() {
     echo "It includes the use of NVIDIA's bug report script to gather detailed information about NVIDIA GPUs and other system info."
     echo "Credit to NVIDIA Corporation for the nvidia-bug-report.sh script."
     echo
+<<<<<<< HEAD
     echo "Usage: $(basename "$0") [--detail] [output-name]"
     echo "  --detail     Also collect all files under /etc and compressed archived logs under /var/log."
     echo "  output-name  Custom name for the output archive (without .tar.gz extension)."
     echo "               Defaults to 'Manycore-bug-report' if not specified."
     echo "               Example: $(basename "$0") deepgadget-A100-5  ->  deepgadget-A100-5.tar.gz"
     echo
+=======
+>>>>>>> faf44f7d47c044a8019bac7d837de08c425e4a51
     echo "This script will, optionally, attempt to install any missing packages required for collecting system information."
     echo "This script may install the following, dependent on them being useful based on the detected target system:"
     CURRENT_TOOL=0
@@ -40,6 +43,7 @@ script_info_and_disclaimer() {
     echo "the output. Notwithstanding the foregoing, Manycore will use the"
     echo "output only for the purpose of investigating your reported issue."
     echo
+<<<<<<< HEAD
     if [ $DETAIL_MODE -eq 1 ]; then
         echo "WARNING: --detail mode is enabled. The following sensitive data categories"
         echo "may be included in the archive:"
@@ -56,6 +60,8 @@ script_info_and_disclaimer() {
         echo "Review the archive carefully before sharing it with Manycore support."
         echo
     fi
+=======
+>>>>>>> faf44f7d47c044a8019bac7d837de08c425e4a51
 }
 
 confirm_tools() {
@@ -85,6 +91,9 @@ integer_check() {
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> faf44f7d47c044a8019bac7d837de08c425e4a51
 # Parse arguments: [--short] [output-name]
 # --short: collect only /etc config and /var/log entries (faster)
 SHORT_MODE=0
@@ -99,6 +108,7 @@ done
 unset _arg
 # In short mode no external tools are needed; suppress the install prompt
 [ $SHORT_MODE -eq 1 ] && SKIP_TOOLS=1
+<<<<<<< HEAD
 =======
 # Parse command-line arguments
 DETAIL_MODE=0
@@ -116,6 +126,8 @@ for arg in "$@"; do
     esac
 done
 >>>>>>> 549d65d (/var/log 하위 과거로그 수집, /etc 하위항목 수집)
+=======
+>>>>>>> faf44f7d47c044a8019bac7d837de08c425e4a51
 
 # We will later check whether this machine will benefit from certain tools, rather than just installing them.
 # Proactively assume the machine is not a VM
@@ -235,7 +247,11 @@ TMP_DIR="tmp_Manycore_bug_report"
 mkdir -p "$TMP_DIR"
 
 # Define and create main directory for logs
+<<<<<<< HEAD
 FINAL_DIR="$TMP_DIR/$OUTPUT_NAME"
+=======
+FINAL_DIR="$TMP_DIR/Manycore-bug-report"
+>>>>>>> faf44f7d47c044a8019bac7d837de08c425e4a51
 mkdir -p "$FINAL_DIR"
 
 # Directories under Manycore-bug-report
@@ -260,6 +276,7 @@ mkdir -p "$ETC_SERVICES_DIR"
 ETC_MODULES_DIR="$ETC_CONFIG_DIR/modules"
 mkdir -p "$ETC_MODULES_DIR"
 
+<<<<<<< HEAD
 if [ $DETAIL_MODE -eq 1 ]; then
     ETC_SNAPSHOT_DIR="$FINAL_DIR/etc-snapshot"
     mkdir -p "$ETC_SNAPSHOT_DIR"
@@ -267,6 +284,8 @@ if [ $DETAIL_MODE -eq 1 ]; then
     mkdir -p "$VAR_LOG_ARCHIVED_DIR"
 fi
 
+=======
+>>>>>>> faf44f7d47c044a8019bac7d837de08c425e4a51
 # Collect SMART data for all drives
 collect_drive_checks() {
     lsblk -o NAME,MAJ:MIN,RM,SIZE,RO,FSTYPE,LABEL,UUID,TYPE,MOUNTPOINT >"$DRIVES_AND_STORAGE_DIR/lsblk.txt"
@@ -521,6 +540,9 @@ echo "$(uptime -p)" since "$(uptime -s)" >"${FINAL_DIR}/uptime.txt"
 collect_drive_checks
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> faf44f7d47c044a8019bac7d837de08c425e4a51
 fi # SHORT_MODE -eq 0
 
 echo "Collecting /etc networking, services, and modules configuration..."
@@ -528,6 +550,7 @@ collect_etc_config
 
 # Compress all collected logs into a single file
 sudo tar -zcf "${OUTPUT_NAME}.tar.gz" -C "$TMP_DIR" Manycore-bug-report
+<<<<<<< HEAD
 =======
 if [ $DETAIL_MODE -eq 1 ]; then
     echo "Collecting /etc contents (excluding sensitive files)..."
@@ -567,6 +590,8 @@ fi
 # Compress all collected logs into a single file
 sudo tar -zcf "${OUTPUT_NAME}.tar.gz" -C "$TMP_DIR" "$OUTPUT_NAME"
 >>>>>>> 549d65d (/var/log 하위 과거로그 수집, /etc 하위항목 수집)
+=======
+>>>>>>> faf44f7d47c044a8019bac7d837de08c425e4a51
 
 # Cleanup
 rm -rf "$TMP_DIR"
