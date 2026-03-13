@@ -1,6 +1,6 @@
 # deepgadget-log-grabber
 
-ManyCoreSoft의 deepgadget™ 서버에서 실행되는 진단용 로그 수집 스크립트입니다. 시스템 로그, GPU 정보, 하드웨어 데이터, 네트워크 설정 등을 수집하여 단일 압축 파일로 생성합니다.
+ManyCoreSoft의 [deepgadget™](https://deepgadget.com/?gad_source=1&gad_campaignid=21910801199&gbraid=0AAAAACuhlghMHVb4ueRS8l5xPomTykbPD&gclid=CjwKCAjwyMnNBhBNEiwA-Kcgu2IryHkwVrzFCqf4Hpo7YGh86wjPO75SuMI8W4a0JoHbLsKL-0TZzRoCDbcQAvD_BwE&lang=ko) 서버에서 실행되는 진단용 로그 수집 스크립트입니다. 시스템 로그, GPU 정보, 하드웨어 데이터, 네트워크 설정 등을 수집하여 단일 압축 파일로 생성합니다.
 
 ---
 
