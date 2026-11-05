@@ -13,11 +13,13 @@
 script_info_and_disclaimer() {
     echo "Usage: $(basename "$0") [--short] [--detail] [output-name]"
     echo "  --short:      Collect only /etc config and /var/log entries (faster)."
-    echo "  --detail:     Also collect all files under /etc and compressed archived logs under /var/log."
+    echo "  --detail:     Also collect all files under /etc and archived (rotated) logs under /var/log."
     echo "  output-name:  Optional. Archive will be saved as <output-name>.tar.gz (default: Manycore-bug-report.tar.gz)"
     echo "                Example: $(basename "$0") deepgadget-A100-5  ->  deepgadget-A100-5.tar.gz"
     echo
     echo "This script is intended to run on a Manycore machine and collects various system logs and information for diagnostic purposes."
+    echo "Supported OS: Debian/Ubuntu (apt) and RHEL-compatible distributions such as Rocky Linux, CentOS, AlmaLinux (dnf/yum)."
+    echo "Detected package manager: ${PKG_MGR:-none}"
     echo "It includes the use of NVIDIA's bug report script to gather detailed information about NVIDIA GPUs and other system info."
     echo "Credit to NVIDIA Corporation for the nvidia-bug-report.sh script."
     echo
@@ -26,7 +28,7 @@ script_info_and_disclaimer() {
     CURRENT_TOOL=0
     while [ ${CURRENT_TOOL} -lt ${#NEEDED_TOOLS[@]} ]; do
         set -- $(echo ${NEEDED_TOOLS[${CURRENT_TOOL}]} | tr -d ',')
-        echo " * ${2}"
+        echo " * $(pkg_name "${2}")"
         CURRENT_TOOL=$((${CURRENT_TOOL}+1))
     done | sort
     confirm_tools
@@ -40,7 +42,7 @@ script_info_and_disclaimer() {
         echo "WARNING: --detail mode is enabled. The following sensitive data categories"
         echo "may be included in the archive:"
         echo "  * All files under /etc (known credential files are excluded; see below)"
-        echo "  * Compressed archived log files from /var/log"
+        echo "  * Archived (rotated) log files from /var/log (.gz/.bz2/.xz/.zst, and -YYYYMMDD on RHEL)"
         echo
         echo "The following files and directories are explicitly excluded from /etc:"
         echo "  * shadow, shadow-, gshadow, gshadow-  (password hashes)"
@@ -48,6 +50,8 @@ script_info_and_disclaimer() {
         echo "  * /etc/ssl/private/                   (SSL/TLS private keys)"
         echo "  * /etc/kubernetes/                    (Kubernetes credentials)"
         echo "  * /etc/credstore/, /etc/credstore.encrypted/"
+        echo "  * /etc/NetworkManager/system-connections/ (saved Wi-Fi/VPN credentials)"
+        echo "  * /etc/sysconfig/network-scripts/keys-*  (saved Wi-Fi/802.1x credentials)"
         echo
         echo "Review the archive carefully before sharing it with Manycore support."
         echo
@@ -55,12 +59,15 @@ script_info_and_disclaimer() {
 }
 
 confirm_tools() {
-    if [[ -v $SKIP_TOOLS && $SKIP_TOOLS -eq 0 ]]; then
-        # The user has non-interactively approved, so no need to proceed with this function.
+    if [[ -v SKIP_TOOLS ]]; then
+        # The user (or --short) has already decided non-interactively, so no need to prompt.
+        # SKIP_TOOLS=0 installs missing tools; any other value skips installation.
+        [[ "$SKIP_TOOLS" == "0" ]] || SKIP_TOOLS=1
         return
     fi
 
-    echo "You may use the environment variable SKIP_TOOLS=0 to answer Y to the following prompt automatically:"
+    echo "You may set SKIP_TOOLS=0 (install) or SKIP_TOOLS=1 (skip) to answer the following prompt automatically."
+    echo "  Example: sudo SKIP_TOOLS=0 bash $(basename "$0")"
     read -N 1 -p "Press Y to install these tools, press any other key to continue without them. " CONFIRM_TOOLS < /dev/tty
     echo
     if [[ "${CONFIRM_TOOLS,,}" == "y" ]]; then
@@ -78,6 +85,24 @@ integer_check() {
 
     echo 1
     return
+}
+
+# Write a notice into a collected file when it ended up empty (tool missing or no data).
+# Usage: note_if_empty <file> <description>
+note_if_empty() {
+    if [ ! -s "${1}" ]; then
+        echo "No ${2} data available. The command may not exist or returned no output on this machine." >"${1}"
+    fi
+}
+
+# Run nvidia-smi only when it exists, so a missing driver does not leave "command not found" in the output.
+# Usage: run_nvidia_smi <output-file> [nvidia-smi arguments...]
+run_nvidia_smi() {
+    local out="${1}"; shift
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        nvidia-smi "$@" >"${out}" 2>&1
+    fi
+    note_if_empty "${out}" "nvidia-smi"
 }
 
 # Parse arguments: [--short] [--detail] [output-name]
@@ -109,6 +134,29 @@ check_if_virtualized() {
     else
         IS_VIRTUAL_MACHINE=0
     fi
+}
+
+# Detect the OS family from the available package manager.
+#   PKG_FAMILY: debian | rhel | unknown
+#   PKG_MGR:    apt-get | dnf | yum | (empty)
+if command -v apt-get >/dev/null 2>&1; then
+    PKG_FAMILY="debian"; PKG_MGR="apt-get"
+elif command -v dnf >/dev/null 2>&1; then
+    PKG_FAMILY="rhel"; PKG_MGR="dnf"
+elif command -v yum >/dev/null 2>&1; then
+    PKG_FAMILY="rhel"; PKG_MGR="yum"
+else
+    PKG_FAMILY="unknown"; PKG_MGR=""
+fi
+
+# Translate a Debian package name to the package name used on this OS.
+pkg_name() {
+    if [ "$PKG_FAMILY" = "rhel" ]; then
+        case "${1}" in
+            lm-sensors) echo "lm_sensors"; return ;;
+        esac
+    fi
+    echo "${1}"
 }
 
 # List the tools to install and any tool metadata
@@ -163,8 +211,17 @@ validate_tools_array() {
 }
 
 check_needed_tools() {
+    if [ $SKIP_TOOLS -eq 0 ] && [ -z "$PKG_MGR" ]; then
+        echo "No supported package manager (apt-get/dnf/yum) found. Continuing without installing tools."
+        SKIP_TOOLS=1
+    fi
+
     if [ $SKIP_TOOLS -eq 0 ]; then
-        sudo apt-get update >/dev/null 2>&1
+        case "$PKG_MGR" in
+            apt-get) sudo apt-get update >/dev/null 2>&1 ;;
+            dnf)     sudo dnf -y makecache >/dev/null 2>&1 ;;
+            yum)     sudo yum -y makecache fast >/dev/null 2>&1 ;;
+        esac
     fi
 
     CURRENT_TOOL=0
@@ -196,8 +253,12 @@ check_needed_tools() {
             continue
         fi
 
-        echo Installing ${2}
-        sudo apt-get install -y ${2} >/dev/null 2>&1
+        PKG="$(pkg_name "${2}")"
+        echo "Installing ${PKG}"
+        sudo "$PKG_MGR" install -y "${PKG}" >/dev/null 2>&1
+        if ! command -v ${1} >/dev/null 2>&1; then
+            echo "  Could not install ${PKG} (not available in the configured repositories). Continuing without ${1}."
+        fi
 
         CURRENT_TOOL=$((${CURRENT_TOOL}+1))
     done
@@ -254,7 +315,7 @@ collect_drive_checks() {
     lsblk -o NAME,MAJ:MIN,RM,SIZE,RO,FSTYPE,LABEL,UUID,TYPE,MOUNTPOINT >"$DRIVES_AND_STORAGE_DIR/lsblk.txt"
 
     # Collect SMART data for all drives
-    DRIVES=$(lsblk | egrep "^sd|^nvm" | awk '{print $1}')
+    DRIVES=$(lsblk | grep -E "^sd|^nvm" | awk '{print $1}')
     for DRIVE in ${DRIVES}; do
         sudo smartctl -x /dev/"${DRIVE}" >"$DRIVES_AND_STORAGE_DIR/smartctl-${DRIVE}.txt" 2>&1
     done
@@ -271,6 +332,17 @@ collect_etc_config() {
     if [ -f /etc/nftables.conf ]; then
         cp /etc/nftables.conf "${NETWORKING_DIR}/etc-nftables-conf.txt"
     fi
+
+    # RHEL/Rocky/CentOS network configuration
+    # ifcfg-* only; keys-* files hold Wi-Fi/802.1x secrets and are excluded
+    if [ -d /etc/sysconfig/network-scripts ]; then
+        mkdir -p "${NETWORKING_DIR}/sysconfig-network-scripts"
+        find /etc/sysconfig/network-scripts -maxdepth 1 -type f -name "ifcfg-*" | sort | while read -r f; do
+            cp "$f" "${NETWORKING_DIR}/sysconfig-network-scripts/" 2>/dev/null
+        done
+    fi
+    [ -f /etc/sysconfig/network ] && cp /etc/sysconfig/network "${NETWORKING_DIR}/etc-sysconfig-network.txt" 2>/dev/null
+    [ -f /etc/selinux/config ] && cp /etc/selinux/config "${ETC_CONFIG_DIR}/selinux-config.txt" 2>/dev/null
 
     if [ -d /etc/network ]; then
         find /etc/network -maxdepth 2 -type f | sort | while read -r f; do
@@ -362,20 +434,31 @@ fi
 echo "Collecting system logs and information..."
 
 # Collect system logs
-for log in /var/log/dmesg /var/log/kern.log /var/log/syslog /var/log/dpkg.log; do
+#   Debian/Ubuntu: dmesg, kern.log, syslog, dpkg.log
+#   RHEL/Rocky/CentOS: messages, boot.log, dnf.log, dnf.rpm.log, yum.log
+for log in /var/log/dmesg /var/log/kern.log /var/log/syslog /var/log/dpkg.log \
+           /var/log/messages /var/log/boot.log /var/log/dnf.log /var/log/dnf.rpm.log /var/log/yum.log; do
     if [ -f "$log" ]; then
         sudo cp "$log" "$SYSTEM_LOGS_DIR/"
     fi
 done
 
-# Collect all apt history logs into one sorted file
-find /var/log/apt -type f -name "history.log*" | sort -Vr | while read log; do
-    if [[ "$log" =~ \.gz$ ]]; then
-        zcat "$log" | sudo tee -a "$SYSTEM_LOGS_DIR/apt-history.log" >/dev/null
-    else
-        cat "$log" | sudo tee -a "$SYSTEM_LOGS_DIR/apt-history.log" >/dev/null
-    fi
-done
+# Collect all apt history logs into one sorted file (Debian/Ubuntu)
+if [ -d /var/log/apt ]; then
+    find /var/log/apt -type f -name "history.log*" | sort -Vr | while read log; do
+        if [[ "$log" =~ \.gz$ ]]; then
+            zcat "$log" | sudo tee -a "$SYSTEM_LOGS_DIR/apt-history.log" >/dev/null
+        else
+            cat "$log" | sudo tee -a "$SYSTEM_LOGS_DIR/apt-history.log" >/dev/null
+        fi
+    done
+fi
+
+# Collect dnf/yum transaction history (RHEL/Rocky/CentOS)
+if [ "$PKG_FAMILY" = "rhel" ]; then
+    sudo "$PKG_MGR" history list >"$SYSTEM_LOGS_DIR/${PKG_MGR}-history.txt" 2>/dev/null
+    note_if_empty "$SYSTEM_LOGS_DIR/${PKG_MGR}-history.txt" "${PKG_MGR} history"
+fi
 
 # Collect Slurm and Lustre logs from /var/log if present
 for _logdir in /var/log/slurm /var/log/lustre; do
@@ -424,80 +507,142 @@ fi
 # Collect SW Raid info
 if command -v mdadm >/dev/null 2>&1; then
     sudo mdadm --detail --scan >"${DRIVES_AND_STORAGE_DIR}/mdadm-scan.txt"
-    cat /etc/mdadm/mdadm.conf >"${DRIVES_AND_STORAGE_DIR}/mdadm-conf.txt"
+    # Debian/Ubuntu: /etc/mdadm/mdadm.conf, RHEL/Rocky/CentOS: /etc/mdadm.conf
+    cat /etc/mdadm/mdadm.conf /etc/mdadm.conf >"${DRIVES_AND_STORAGE_DIR}/mdadm-conf.txt" 2>/dev/null
+    note_if_empty "${DRIVES_AND_STORAGE_DIR}/mdadm-scan.txt" "mdadm scan"
+    note_if_empty "${DRIVES_AND_STORAGE_DIR}/mdadm-conf.txt" "mdadm.conf"
 fi
 
 # Collecdt GRUB info
 cat /proc/cmdline >"${GRUB_DIR}/proc_cmdline.txt"
-cat /etc/default/grub >"${GRUB_DIR}/grub.txt"
+cat /etc/default/grub >"${GRUB_DIR}/grub.txt" 2>/dev/null
+note_if_empty "${GRUB_DIR}/grub.txt" "/etc/default/grub"
+if command -v grubby >/dev/null 2>&1; then
+    # RHEL/Rocky/CentOS: boot entries and per-kernel arguments
+    sudo grubby --info=ALL >"${GRUB_DIR}/grubby.txt" 2>/dev/null
+    note_if_empty "${GRUB_DIR}/grubby.txt" "grubby"
+fi
 if [ -d /etc/default/grub.d/ ]; then
     cp -r /etc/default/grub.d/ "${GRUB_DIR}/"
 fi
 
 # Check for memory remapping and memory errors on GPUs
-nvidia-smi --query-remapped-rows=gpu_bus_id,gpu_uuid,remapped_rows.correctable,remapped_rows.uncorrectable,remapped_rows.pending,remapped_rows.failure \
-    --format=csv >"${GPU_MEMORY_ERRORS_DIR}/remapped-memory.txt" 2>&1
-if [ ! -s "${GPU_MEMORY_ERRORS_DIR}/remapped-memory.txt" ]; then
-    echo "No nvidia-smi data available. This machine may not have nvidia-smi." >"${GPU_MEMORY_ERRORS_DIR}/remapped-memory.txt"
-fi
+run_nvidia_smi "${GPU_MEMORY_ERRORS_DIR}/remapped-memory.txt" \
+    --query-remapped-rows=gpu_bus_id,gpu_uuid,remapped_rows.correctable,remapped_rows.uncorrectable,remapped_rows.pending,remapped_rows.failure \
+    --format=csv
 
-nvidia-smi --query-gpu=index,pci.bus_id,uuid,ecc.errors.corrected.volatile.dram,ecc.errors.corrected.volatile.sram \
-    --format=csv >"${GPU_MEMORY_ERRORS_DIR}/ecc-errors.txt" 2>&1
-if [ ! -s "${GPU_MEMORY_ERRORS_DIR}/ecc-errors.txt" ]; then
-    echo "No nvidia-smi data available. This machine may not have nvidia-smi." >"${GPU_MEMORY_ERRORS_DIR}/ecc-errors.txt"
-fi
+run_nvidia_smi "${GPU_MEMORY_ERRORS_DIR}/ecc-errors.txt" \
+    --query-gpu=index,pci.bus_id,uuid,ecc.errors.corrected.volatile.dram,ecc.errors.corrected.volatile.sram \
+    --format=csv
 
-nvidia-smi --query-gpu=index,pci.bus_id,uuid,ecc.errors.uncorrected.aggregate.dram,ecc.errors.uncorrected.aggregate.sram \
-    --format=csv >"${GPU_MEMORY_ERRORS_DIR}/uncorrected-ecc_errors.txt" 2>&1
-if [ ! -s "${GPU_MEMORY_ERRORS_DIR}/uncorrected-ecc_errors.txt" ]; then
-    echo "No nvidia-smi data available. This machine may not have nvidia-smi." >"${GPU_MEMORY_ERRORS_DIR}/uncorrected-ecc_errors.txt"
-fi
+run_nvidia_smi "${GPU_MEMORY_ERRORS_DIR}/uncorrected-ecc_errors.txt" \
+    --query-gpu=index,pci.bus_id,uuid,ecc.errors.uncorrected.aggregate.dram,ecc.errors.uncorrected.aggregate.sram \
+    --format=csv
 
 # Check hibernation settings
 sudo systemctl status hibernate.target hybrid-sleep.target \
-    suspend-then-hibernate.target sleep.target suspend.target >"${FINAL_DIR}/hibernation-settings.txt"
+    suspend-then-hibernate.target sleep.target suspend.target >"${FINAL_DIR}/hibernation-settings.txt" 2>&1
+note_if_empty "${FINAL_DIR}/hibernation-settings.txt" "systemctl hibernation target"
 
-# Collect sources.list.d repo info
-output_file="${REPOS_AND_PACKAGES_DIR}/listd-repos.txt"
+# Collect package repository info
+if [ "$PKG_FAMILY" = "rhel" ]; then
+    # RHEL/Rocky/CentOS: /etc/yum.repos.d/*.repo
+    output_file="${REPOS_AND_PACKAGES_DIR}/yum-repos.txt"
+    for file in /etc/yum.repos.d/*.repo; do
+        if [ -f "$file" ]; then
+            echo "$(basename "$file")" >>"$output_file"
+            grep -v '^#' "$file" >>"$output_file"
+            echo "" >>"$output_file"
+        fi
+    done
+    note_if_empty "$output_file" "/etc/yum.repos.d"
+    sudo "$PKG_MGR" repolist all >"${REPOS_AND_PACKAGES_DIR}/repolist.txt" 2>/dev/null
+    note_if_empty "${REPOS_AND_PACKAGES_DIR}/repolist.txt" "${PKG_MGR} repolist"
+else
+    # Debian/Ubuntu: /etc/apt/sources.list.d/*
+    output_file="${REPOS_AND_PACKAGES_DIR}/listd-repos.txt"
+    for file in /etc/apt/sources.list.d/*; do
+        if [ -f "$file" ]; then
+            echo "$(basename "$file")" >>"$output_file"
 
-for file in /etc/apt/sources.list.d/*; do
-    if [ -f "$file" ]; then
-        echo "$(basename "$file")" >>"$output_file"
+            cat "$file" >>"$output_file"
 
-        cat "$file" >>"$output_file"
-
-        echo "" >>"$output_file"
-    fi
-done
+            echo "" >>"$output_file"
+        fi
+    done
+fi
 
 # Collect other system information
-df -hTP >"${DRIVES_AND_STORAGE_DIR}/df.txt"
-cat /etc/fstab >"${DRIVES_AND_STORAGE_DIR}/fstab.txt"
-cat /proc/mdstat >"${DRIVES_AND_STORAGE_DIR}/mdstat.txt"
-lsmod >"${FINAL_DIR}/lsmod.txt"
-dpkg -l >"${REPOS_AND_PACKAGES_DIR}/dpkg.txt"
+df -hTP >"${DRIVES_AND_STORAGE_DIR}/df.txt" 2>/dev/null
+cat /etc/fstab >"${DRIVES_AND_STORAGE_DIR}/fstab.txt" 2>/dev/null
+cat /proc/mdstat >"${DRIVES_AND_STORAGE_DIR}/mdstat.txt" 2>/dev/null
+lsmod >"${FINAL_DIR}/lsmod.txt" 2>/dev/null
+if [ "$PKG_FAMILY" = "rhel" ]; then
+    rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\t%{INSTALLTIME:date}\n' 2>/dev/null | sort >"${REPOS_AND_PACKAGES_DIR}/rpm.txt"
+    note_if_empty "${REPOS_AND_PACKAGES_DIR}/rpm.txt" "rpm"
+else
+    dpkg -l >"${REPOS_AND_PACKAGES_DIR}/dpkg.txt" 2>/dev/null
+    grep -v '^#' /etc/apt/sources.list >"${REPOS_AND_PACKAGES_DIR}/sources-list.txt" 2>/dev/null
+    note_if_empty "${REPOS_AND_PACKAGES_DIR}/dpkg.txt" "dpkg"
+    note_if_empty "${REPOS_AND_PACKAGES_DIR}/sources-list.txt" "/etc/apt/sources.list"
+fi
 export PIP_DISABLE_PIP_VERSION_CHECK=1
-pip -v list >"${REPOS_AND_PACKAGES_DIR}/pip-list.txt" 2>/dev/null
-unset PIP_DISABLE_PIP_VERSION_CHECK
-grep -v '^#' /etc/apt/sources.list >"${REPOS_AND_PACKAGES_DIR}/sources-list.txt"
-cat /proc/mounts >"${DRIVES_AND_STORAGE_DIR}/mounts.txt"
-sudo sysctl -a >"${FINAL_DIR}/sysctl-all.txt"
-systemctl --type=service >"${FINAL_DIR}/systemctl-services.txt"
-sudo netplan get all >"${NETWORKING_DIR}/netplan.txt" 2>/dev/null
-ip addr >"${NETWORKING_DIR}/ip-addr.txt"
-sudo iptables -L --line-numbers >"${NETWORKING_DIR}/iptables.txt"
-sudo ufw status >"${NETWORKING_DIR}/ufw-status.txt"
-sudo resolvectl status >"${NETWORKING_DIR}/resolvectl-status.txt"
-top -n 1 -b >"${FINAL_DIR}/top.txt"
-nvidia-smi >"${FINAL_DIR}/nvidia-smi.txt" 2>&1
-if [ ! -s "${FINAL_DIR}/nvidia-smi.txt" ]; then
-    echo "No nvidia-smi data available. This machine may not have nvidia-smi." >"${FINAL_DIR}/nvidia-smi.txt"
+# pip may only be available as pip3 (RHEL/Rocky/CentOS)
+PIP_CMD="$(command -v pip || command -v pip3)"
+[ -n "$PIP_CMD" ] && "$PIP_CMD" -v list >"${REPOS_AND_PACKAGES_DIR}/pip-list.txt" 2>/dev/null
+unset PIP_DISABLE_PIP_VERSION_CHECK PIP_CMD
+cat /proc/mounts >"${DRIVES_AND_STORAGE_DIR}/mounts.txt" 2>/dev/null
+sudo sysctl -a >"${FINAL_DIR}/sysctl-all.txt" 2>/dev/null
+systemctl --type=service >"${FINAL_DIR}/systemctl-services.txt" 2>/dev/null
+if command -v netplan >/dev/null 2>&1; then
+    sudo netplan get all >"${NETWORKING_DIR}/netplan.txt" 2>/dev/null
+    note_if_empty "${NETWORKING_DIR}/netplan.txt" "netplan"
 fi
-nvidia-smi -q | grep -E "Serial Number|Bus Id" >"${FINAL_DIR}/gpu-serials.txt" 2>&1
-if [ ! -s "${FINAL_DIR}/gpu-serials.txt" ]; then
-    echo "No nvidia-smi data available. This machine may not have nvidia-smi." >"${FINAL_DIR}/gpu-serials.txt"
+if command -v nmcli >/dev/null 2>&1; then
+    # Connection names and states only; secrets are not shown without --show-secrets
+    { echo "## nmcli general"; nmcli general 2>&1
+      echo; echo "## nmcli device status"; nmcli device status 2>&1
+      echo; echo "## nmcli connection show"; nmcli connection show 2>&1; } >"${NETWORKING_DIR}/nmcli.txt"
 fi
-sudo ss --tcp --udp --listening --numeric --process >"${NETWORKING_DIR}/ss.txt"
+ip addr >"${NETWORKING_DIR}/ip-addr.txt" 2>/dev/null
+sudo iptables -L --line-numbers >"${NETWORKING_DIR}/iptables.txt" 2>/dev/null
+if command -v ufw >/dev/null 2>&1; then
+    sudo ufw status >"${NETWORKING_DIR}/ufw-status.txt" 2>/dev/null
+    note_if_empty "${NETWORKING_DIR}/ufw-status.txt" "ufw"
+fi
+if command -v firewall-cmd >/dev/null 2>&1; then
+    # RHEL/Rocky/CentOS default firewall
+    { echo "state: $(sudo firewall-cmd --state 2>&1)"; sudo firewall-cmd --list-all-zones 2>&1; } >"${NETWORKING_DIR}/firewalld.txt"
+fi
+if command -v nft >/dev/null 2>&1; then
+    sudo nft list ruleset >"${NETWORKING_DIR}/nft-ruleset.txt" 2>/dev/null
+    note_if_empty "${NETWORKING_DIR}/nft-ruleset.txt" "nft ruleset"
+fi
+if command -v sestatus >/dev/null 2>&1; then
+    # SELinux mode (RHEL/Rocky/CentOS)
+    sestatus >"${FINAL_DIR}/selinux-status.txt" 2>&1
+fi
+sudo resolvectl status >"${NETWORKING_DIR}/resolvectl-status.txt" 2>/dev/null
+top -n 1 -b >"${FINAL_DIR}/top.txt" 2>/dev/null
+note_if_empty "${DRIVES_AND_STORAGE_DIR}/df.txt" "df"
+note_if_empty "${DRIVES_AND_STORAGE_DIR}/fstab.txt" "/etc/fstab"
+note_if_empty "${DRIVES_AND_STORAGE_DIR}/mdstat.txt" "/proc/mdstat"
+note_if_empty "${FINAL_DIR}/lsmod.txt" "lsmod"
+note_if_empty "${REPOS_AND_PACKAGES_DIR}/pip-list.txt" "pip"
+note_if_empty "${DRIVES_AND_STORAGE_DIR}/mounts.txt" "/proc/mounts"
+note_if_empty "${FINAL_DIR}/sysctl-all.txt" "sysctl"
+note_if_empty "${FINAL_DIR}/systemctl-services.txt" "systemctl"
+note_if_empty "${NETWORKING_DIR}/ip-addr.txt" "ip addr"
+note_if_empty "${NETWORKING_DIR}/iptables.txt" "iptables"
+note_if_empty "${NETWORKING_DIR}/resolvectl-status.txt" "resolvectl"
+note_if_empty "${FINAL_DIR}/top.txt" "top"
+run_nvidia_smi "${FINAL_DIR}/nvidia-smi.txt"
+if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi -q 2>/dev/null | grep -E "Serial Number|Bus Id" >"${FINAL_DIR}/gpu-serials.txt"
+fi
+note_if_empty "${FINAL_DIR}/gpu-serials.txt" "nvidia-smi"
+sudo ss --tcp --udp --listening --numeric --process >"${NETWORKING_DIR}/ss.txt" 2>/dev/null
+note_if_empty "${NETWORKING_DIR}/ss.txt" "ss"
 echo "$(uptime -p)" since "$(uptime -s)" >"${FINAL_DIR}/uptime.txt"
 
 collect_drive_checks
@@ -516,8 +661,10 @@ if [ $DETAIL_MODE -eq 1 ]; then
         -not -name "gshadow"
         -not -name "gshadow-"
         -not -name "ssh_host_*_key"
+        -not -path "/etc/sysconfig/network-scripts/keys-*"
     )
-    for sensitive_dir in "/etc/ssl/private" "/etc/kubernetes" "/etc/credstore" "/etc/credstore.encrypted"; do
+    for sensitive_dir in "/etc/ssl/private" "/etc/kubernetes" "/etc/credstore" "/etc/credstore.encrypted" \
+                         "/etc/NetworkManager/system-connections"; do
         FIND_ETC_ARGS+=(-not -path "${sensitive_dir}/*")
     done
     sudo find /etc "${FIND_ETC_ARGS[@]}" -print0 | while IFS= read -r -d '' src; do
@@ -528,12 +675,14 @@ if [ $DETAIL_MODE -eq 1 ]; then
     done
 
     echo "Estimating size of archived logs in /var/log..."
-    VAR_LOG_ARCHIVE_SIZE=$(sudo find /var/log -type f \( -name "*.gz" -o -name "*.bz2" -o -name "*.xz" -o -name "*.zst" \) -print0 \
+    VAR_LOG_ARCHIVE_SIZE=$(sudo find /var/log -type f \( -name "*.gz" -o -name "*.bz2" -o -name "*.xz" -o -name "*.zst" \
+        -o -name "*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]" \) -print0 \
         | sudo xargs -0 du -ch 2>/dev/null | tail -1 | awk '{print $1}')
     echo "  Archived logs total size: ${VAR_LOG_ARCHIVE_SIZE:-0}. Proceeding with collection..."
 
     echo "Collecting archived logs from /var/log..."
-    sudo find /var/log -type f \( -name "*.gz" -o -name "*.bz2" -o -name "*.xz" -o -name "*.zst" \) -print0 \
+    sudo find /var/log -type f \( -name "*.gz" -o -name "*.bz2" -o -name "*.xz" -o -name "*.zst" \
+        -o -name "*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]" \) -print0 \
         | while IFS= read -r -d '' logfile; do
             rel_path="${logfile#/var/log/}"
             dest_dir="$VAR_LOG_ARCHIVED_DIR/$(dirname "$rel_path")"
