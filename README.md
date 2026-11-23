@@ -207,7 +207,7 @@ sudo SKIP_TOOLS=1 bash deepgadget-log-grabber.sh
 
 ## 참고 사항
 
-- 대부분의 수집 명령에 `sudo` 권한이 필요합니다.
+- 대부분의 수집 명령에 `sudo` 권한이 필요합니다. `sudo`가 설치되지 않은 최소 설치(minimal) 환경에서는 root로 직접 실행하면 `sudo` 없이 동작합니다.
 - 특정 도구나 데이터 소스를 사용할 수 없는 경우 스크립트가 중단되지 않고 해당 파일에 `No ... data available` 안내 메시지를 남깁니다.
 - 설치 프롬프트는 터미널(`/dev/tty`)에서 입력을 받습니다. cron 등 비대화형 환경에서는 `--short` 또는 `sudo SKIP_TOOLS=0|1 ...`을 사용하고, 원격 실행 시 `ssh -t`를 사용하십시오.
 - Windows에서 저장소를 받은 경우 스크립트가 CRLF 줄바꿈으로 변환될 수 있습니다. 서버에서 직접 `git clone` 하거나 `sed -i 's/\r$//' deepgadget-log-grabber.sh`로 변환 후 실행하십시오.

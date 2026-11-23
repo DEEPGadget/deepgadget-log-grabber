@@ -123,6 +123,17 @@ unset _arg
 # In short mode no external tools are needed; suppress the install prompt
 [ $SHORT_MODE -eq 1 ] && SKIP_TOOLS=1
 
+# Minimal RHEL/CentOS installs and container images may not ship sudo.
+# When already running as root, run "sudo" commands directly; otherwise sudo is required.
+if ! command -v sudo >/dev/null 2>&1; then
+    if [ "$(id -u)" -eq 0 ]; then
+        sudo() { "$@"; }
+    else
+        echo "sudo is not installed. Please run this script as root: bash $(basename "$0") $*"
+        exit 1
+    fi
+fi
+
 # We will later check whether this machine will benefit from certain tools, rather than just installing them.
 # Proactively assume the machine is not a VM
 IS_VIRTUAL_MACHINE=0
@@ -316,6 +327,10 @@ collect_drive_checks() {
 
     # Collect SMART data for all drives
     DRIVES=$(lsblk | grep -E "^sd|^nvm" | awk '{print $1}')
+    if ! command -v smartctl >/dev/null 2>&1; then
+        note_if_empty "$DRIVES_AND_STORAGE_DIR/smartctl.txt" "smartctl"
+        return
+    fi
     for DRIVE in ${DRIVES}; do
         sudo smartctl -x /dev/"${DRIVE}" >"$DRIVES_AND_STORAGE_DIR/smartctl-${DRIVE}.txt" 2>&1
     done
@@ -381,6 +396,7 @@ collect_etc_config() {
     fi
 
     ls -la /etc/init.d/ >"${ETC_SERVICES_DIR}/init-d-list.txt" 2>/dev/null
+    note_if_empty "${ETC_SERVICES_DIR}/init-d-list.txt" "/etc/init.d"
 
     [ -f /etc/crontab ] && cp /etc/crontab "${ETC_SERVICES_DIR}/crontab.txt"
     for crondir in /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.weekly /etc/cron.monthly; do
@@ -692,10 +708,15 @@ if [ $DETAIL_MODE -eq 1 ]; then
 fi
 
 # Compress all collected logs into a single file
-sudo tar -zcf "${OUTPUT_NAME}.tar.gz" -C "$TMP_DIR" "$OUTPUT_NAME"
+if ! sudo tar -zcf "${OUTPUT_NAME}.tar.gz" -C "$TMP_DIR" "$OUTPUT_NAME"; then
+    echo
+    echo "ERROR: Failed to create ${OUTPUT_NAME}.tar.gz."
+    echo "The collected files were kept in ${TMP_DIR}/${OUTPUT_NAME}."
+    exit 1
+fi
 
 # Cleanup
-rm -rf "$TMP_DIR"
+sudo rm -rf "$TMP_DIR"
 
 echo
 echo "All logs have been collected and compressed into ${OUTPUT_NAME}.tar.gz."
